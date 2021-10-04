@@ -8,6 +8,7 @@ contract Loan {
   struct LoanInfo {
     address lentBy;
     address requestedBy;
+    uint256 id;
     uint256 amountLent;
     uint256 loanInterest;
     uint256 collateralOwed;
@@ -18,8 +19,8 @@ contract Loan {
 
 // Array to store loans
   uint[] activeRO;
-  uint[] closedRO;
-
+  uint[] loansTaken;
+  uint[] loansClosed;
 // Mappings to store active offers/requests
   mapping (uint => LoanInfo) activeRequest;
   mapping (uint => LoanInfo) activeOffer;
@@ -30,9 +31,9 @@ contract Loan {
 
 // Events
   event loanOffered(uint256 _amount, uint256 _interest, uint256 _collateral);
-  event loanOffered(uint256 _amount, uint256 _interest, uint256 _collateral);
+  event loanRequested(uint256 _amount, uint256 _interest, uint256 _collateral);
   event loanTaken(uint256 _amount, uint256 _interest, uint256 _collateral);
-  event loanOffered(uint256 _amount, uint256 _interest, uint256 _collateral);
+  event loanRepayed(uint256 _amount, uint256 _interest, uint256 _collateral);
 
 //Variables
   uint256 private loanId = 0;
@@ -47,7 +48,7 @@ contract Loan {
     require(amount >= 0, "You must lend a non 0 amount");
 
     uint collateral = amount / 100000;
-    activeOffer[loanId] = (LoanerInfo(msg.sender, 0, amount, interest, collateral, time, 0, true));
+    activeOffer[loanId] = (LoanerInfo(msg.sender, 0, loanId, amount, interest, collateral, time, 0, true));
     activeRO.push(loanId);
 
     loanId += 1;
@@ -65,7 +66,7 @@ contract Loan {
     require(amount >= 0, "You must loan a non 0 amount");
     require(amount <= 100000000, "Loan cannot exceed max supply");
 
-    activeRequest[loanId] = (LoanInfo(0, msg.sender, amount, interest, collateral, time, 0, false));
+    activeRequest[loanId] = (LoanInfo(0, msg.sender, loanId, amount, interest, collateral, time, 0, false));
     activeRO.push(loanId);
 
     loanId += 1;
@@ -78,43 +79,129 @@ contract Loan {
     CamCoin borrowerToken = CamCoin(msg.sender);
     CamCoin lenderToken = CamCoin(activeOffer[takenLoanId].lentBy);
 
-    activeLoanTaken[takenLoanId] = activeOffer[takenLoanId];
+    activeLoan[takenLoanId] = activeOffer[takenLoanId];
     delete(activeOffer[takenLoanId]);
-    activeLoanTaken[takenLoanId].loanStartTime = now;
+    loansTaken.push(loanId);
+    activeRO = deleteFromArray(loanId, activeRO);
 
-    require(borrowerToken.balanceOf(msg.sender) >= activeLoanTaken[takenLoanId].collateralOwed);
-    borrowerToken.transferFrom(msg.sender, address(this), activeLoanTaken[takenLoanId].collateralOwed);
-    lenderToken.transfer(msg.sender, activeLoanTaken[takenLoanId].amountLent);
-    emit loanTaken(uint256 activeLoanTaken[takenLoanId].amountLent, uint256 activeLoanTaken[takenLoanId].loanInterest, uint256 activeLoanTaken[takenLoanId].collateralOwed);
+    activeLoan[takenLoanId].loanStartTime = now;
+    activeLoan[takenLoanId].requestedBy = msg.sender;
+
+    require(borrowerToken.balanceOf(msg.sender) >= activeLoan[takenLoanId].collateralOwed);
+    borrowerToken.transferFrom(msg.sender, address(this), activeLoan[takenLoanId].collateralOwed);
+    lenderToken.transfer(msg.sender, activeLoan[takenLoanId].amountLent);
+    emit loanTaken(uint256 activeLoan[takenLoanId].amountLent, uint256 activeLoan[takenLoanId].loanInterest, uint256 activeLoan[takenLoanId].collateralOwed);
   }
 
 // Function to allow users to accept a loan request - transfers amount from user to borrower
-  function offerLoan(uint requestTakenId) {
+  function offerLoan(uint requestTakenId) external {
     CamCoin borrowerToken = CamCoin(activeRequest[requestTakenId].requestedBy);
     CamCoin lenderToken = CamCoin(msg.sender);
 
-    activeRequestTaken[requestTakenId] = activeRequest[requestTakenId];
+    activeLoan[requestTakenId] = activeRequest[requestTakenId];
     delete(activeRequest[requestTakenId]);
-    activeRequestTaken[requestTakenId].loanStartTime = now;
-    activeRequestTaken[requestTakenId].loanedFrom = msg.sender;
+    loansTaken.push(loanId);
+    activeRO = deleteFromArray(loanId, activeRO);
+
+    activeLoan[requestTakenId].loanStartTime = now;
+    activeLoan[requestTakenId].lentBy = msg.sender;
 
     require(lenderToken.balanceOf(msg.sender) >= activeRequestTaken[requestTakenId].amountRequested);
-    lenderToken.transfer(activeRequestTaken[requestTakenId].requestedBy, activeRequestTaken[requestTakenId].amountRequested);
-    emit loanOffered(uint256 activeRequestTaken[requestTakenId].amountRequested, uint256 interestRequested[requestTakenId], uint256 collateralRequested[requestTakenId]);
+    lenderToken.transfer(activeLoan[requestTakenId].requestedBy, activeLoan[requestTakenId].amountRequested);
+    emit loanOffered(uint256 activeLoan[requestTakenId].amountRequested, uint256 activeLoan[requestTakenId].loanInterest, uint256 activeLoan[requestTakenId].collateralOwed);
   }
 
-  function repayLoan(uint loanId) {
-    CamCoin borrowerToken = CamCoin(activeRequestTaken[requestTakenId].requestedBy);
-    CamCoin lenderToken = CamCoin(msg.sender);
+  function repayLoan(uint loanId) external{
+    CamCoin borrowerToken = CamCoin(msg.sender);
+    CamCoin lenderToken = CamCoin(activeLoan[loanId].lentBy);
+
+    require(borrowerToken.balanceOf(msg.sender) >= totalPayment); // change this - needs to include calcualted interest
+
+    // transfer from borrower to loaner
+    borrowerToken.transfer(lenderToken, totalPayment);
+    // transfer collateral from contract back to borrower
+    transfer(borrowerToken, activeLoan[loanId].collateralOwed);
+    // move loan id from active to closed
+    loansClosed.push(loanId);
+    loansTaken = deleteFromArray(loanId, loansTaken);
+
+    // remove from activeLoan
+    delete(activeLoan[loanId]);
+    // emit repayment
+    emit loanRepayed(uint256 activeLoan[requestTakenId].amountRequested, uint256 activeLoan[requestTakenId].loanInterest, uint256 activeLoan[requestTakenId].collateralOwed);
   }
 
-  function withdrawLoanOffer {
-
+  function checkLoanTime(uint loanId) view internal{
+    // check current time - loan time < loan loan span
+    uint timeSpan = activeLoan[loanId].loanTimeSpan * 60 * 60;
+    // if yes transfer collateral to loaner and everything that can be recovered -> add loan to closed
+    // if no end
+    if ((time - activeLoan[loanId].loanStartTime) > timeSpan) {
+      transfer(activeLoan[loanId].collateralOwed, activeLoan[loanId].lentBy);
+      loansClosed.push(loanId);
+      loansTaken = deleteFromArray(loanId, loansTaken);
+      delete(activeLoan[loanId]);
+      emit loanDefaulted(uint256 activeLoan[requestTakenId].amountRequested, uint256 activeLoan[requestTakenId].loanInterest, uint256 activeLoan[requestTakenId].collateralOwed);
+    }
   }
 
-  function withdrawLoanRequest {
+  function withdrawLoanOffer(uint loanId) external {
+    transfer(activeOffer[loanId].amountLent, msg.sender);
+    // close loan id
+    delete(activeOffer[loanId]);
+    activeRO = deleteFromArray(loanId, activeRO);
 
+    // transfer tokens offered back to owner
+  }
+
+  function withdrawLoanRequest(uint loanId) external {
+    transfer(activeRequest[loanId].collateralOwed, msg.sender);
+    // close loan id
+    delete(activeRequest[loanId]);
+    activeRO = deleteFromArray(loanId, activeRO);
+
+    // transfer collateral back to borrower
+  }
+
+  function deleteFromArray(uint valueToDelete, uint[] array) returns(uint[]) internal {
+    for (int i = 0; i < array.length; i++) {
+      if (array[i] == valueToDelete) {
+        array[i] = array.length - 1;
+        array.pop();
+      }
+    }
+    return array;
+  }
+
+  function getRequestedLoanDetails(uint loanId) view returns(LoanInfo) external {
+    return activeRequest[loanId];
+  }
+
+  function getOfferedLoanDetails(uint loanId) view returns(LoanInfo) external {
+    return activeOffer[loanId];
+  }
+
+  function getActiveLoanDetails(uint loanId) view returns(LoanInfo) external {
+    return activeLoan[loanId];
+  }
+
+  function getClosedLoanDetails(uint loanId) view returns(address, address, uint256, uint256, uint256, uint256, uint256, bool) external {
+    LoanInfo loan = closedLoan[loanId];
+    return loan.lentBy, loan.requestedBy, loan.amountLent, loan.loanInterest, loan.collateralOwed, loanTimeSpan, loanStartTime, loanOffered;
+  }
+
+  function getROLoansId() view returns (uint[]) {
+    return activeRO;
+  }
+
+  function getAcitveLoansId() view returns (uint[]) {
+    return activeLoan;
+  }
+
+  function getROLoansId() view returns (uint[]) {
+    return closedLoan;
   }
 }
+
 
 // SPDX-License-Identifier: GPL-1.0-or-later
